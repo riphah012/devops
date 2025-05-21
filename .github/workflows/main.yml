@@ -1,4 +1,4 @@
-name: Deploy to Minikube on Contabo
+name: Deploy Static HTML using Python HTTP Server
 
 on:
   push:
@@ -7,86 +7,48 @@ on:
 
 jobs:
   deploy:
+    name: Deploy to Contabo with Python HTTP Server
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: SSH into Contabo and deploy on Minikube
+      - name: SSH and deploy on Contabo using password
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.CONTABO_HOST }}
           username: ${{ secrets.CONTABO_USER }}
           password: ${{ secrets.CONTABO_PASSWORD }}
           script: |
-            # Ensure Minikube is running
-            minikube status || minikube start
+            cd /root/devops_project
 
-            # Switch Docker to Minikube's daemon
-            eval $(minikube docker-env)
+            # Stop and remove old container if exists
+            docker stop static-site || true
+            docker rm static-site || true
 
-            # Prepare working directory
-            mkdir -p /home/${USER}/static-deploy
-            cd /home/${USER}/static-deploy
+            # Remove old image
+            docker rmi static-site-image || true
 
-            # Clean previous files
-            rm -f index.html Dockerfile
+            # Pull latest code
+            rm -rf devops
+            git clone https://github.com/riphah012/devops.git
+            cd devops
 
-            # Save the latest index.html from the repo
-            echo "${{ secrets.INDEX_HTML }}" > index.html
+            # Copy index.html to root project directory
+            cp index.html /root/devops_project/
 
-            # Create Dockerfile
+            # Create Dockerfile for Python HTTP server on port 3000
             cat <<EOF > Dockerfile
             FROM python:3.11-alpine
             WORKDIR /app
             COPY index.html /app/
-            EXPOSE 8081
-            CMD ["python3", "-m", "http.server", "8081"]
+            EXPOSE 3000
+            CMD ["python3", "-m", "http.server", "3000"]
             EOF
 
-            # Build Docker image in Minikube
-            docker build -t static-site-image:latest .
+            # Build Docker image
+            docker build -t static-site-image .
 
-            # Create Kubernetes deployment YAML
-            cat <<EOF > deployment.yaml
-            apiVersion: apps/v1
-            kind: Deployment
-            metadata:
-              name: static-site
-            spec:
-              replicas: 1
-              selector:
-                matchLabels:
-                  app: static-site
-              template:
-                metadata:
-                  labels:
-                    app: static-site
-                spec:
-                  containers:
-                    - name: static-site
-                      image: static-site-image:latest
-                      ports:
-                        - containerPort: 8081
-            EOF
-
-            # Create service YAML
-            cat <<EOF > service.yaml
-            apiVersion: v1
-            kind: Service
-            metadata:
-              name: static-site-service
-            spec:
-              type: NodePort
-              selector:
-                app: static-site
-              ports:
-                - port: 8081
-                  targetPort: 8081
-                  nodePort: 30081
-            EOF
-
-            # Apply deployment and service
-            kubectl apply -f deployment.yaml
-            kubectl apply -f service.yaml
+            # Run Docker container and expose port 3000
+            docker run -d --name static-site -p 3000:3000 static-site-image
