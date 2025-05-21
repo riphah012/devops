@@ -1,0 +1,42 @@
+name: Deploy to Minikube on Contabo
+
+on:
+  push:
+    branches:
+      - main  # or your deployment branch
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Deploy to Contabo with Minikube
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.CONTABO_HOST }}
+          username: ${{ secrets.CONTABO_USER }}
+          password: ${{ secrets.CONTABO_PASSWORD }}
+          port: 22
+          script: |
+            # Go to correct directory
+            cd /root/devops_project/devops
+
+            # Start Minikube if not running
+            if ! minikube status | grep -q "host: Running"; then
+              minikube start
+            fi
+
+            # Point Docker to Minikube's environment
+            eval $(minikube docker-env)
+
+            # Build Docker image inside Minikube
+            docker build -t my-static-site:latest .
+
+            # Apply Kubernetes deployment
+            kubectl apply -f deployment.yaml
+
+            # Wait for deployment rollout
+            kubectl rollout status deployment/static-site
