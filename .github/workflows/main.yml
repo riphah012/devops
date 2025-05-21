@@ -1,4 +1,4 @@
-name: Deploy Static HTML using Python HTTP Server
+name: Deploy to Minikube on Contabo
 
 on:
   push:
@@ -7,38 +7,36 @@ on:
 
 jobs:
   deploy:
-    name: Deploy to Contabo with Python HTTP Server
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: SSH and deploy on Contabo using password
+      - name: SSH into Contabo and deploy on Minikube
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.CONTABO_HOST }}
           username: ${{ secrets.CONTABO_USER }}
           password: ${{ secrets.CONTABO_PASSWORD }}
           script: |
-            cd /root/devops_project
+            # Ensure Minikube is running
+            minikube status || minikube start
 
-            # Stop and remove old container
-            docker stop static-site || true
-            docker rm static-site || true
+            # Switch Docker to Minikube's daemon
+            eval $(minikube docker-env)
 
-            # Remove old image
-            docker rmi static-site-image || true
+            # Prepare working directory
+            mkdir -p /home/${USER}/static-deploy
+            cd /home/${USER}/static-deploy
 
-            # Pull latest code
-            rm -rf devops
-            git clone https://github.com/riphah012/devops.git
-            cd devops
+            # Clean previous files
+            rm -f index.html Dockerfile
 
-            # Copy index.html to target directory (optional, depending on context)
-            cp index.html /root/devops_project/
+            # Save the latest index.html from the repo
+            echo "${{ secrets.INDEX_HTML }}" > index.html
 
-            # Create Dockerfile with Python HTTP Server
+            # Create Dockerfile
             cat <<EOF > Dockerfile
             FROM python:3.11-alpine
             WORKDIR /app
@@ -47,6 +45,48 @@ jobs:
             CMD ["python3", "-m", "http.server", "8081"]
             EOF
 
-            # Build and run container
-            docker build -t static-site-image .
-            docker run -d --name static-site -p 8081:8081 static-site-image
+            # Build Docker image in Minikube
+            docker build -t static-site-image:latest .
+
+            # Create Kubernetes deployment YAML
+            cat <<EOF > deployment.yaml
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: static-site
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: static-site
+              template:
+                metadata:
+                  labels:
+                    app: static-site
+                spec:
+                  containers:
+                    - name: static-site
+                      image: static-site-image:latest
+                      ports:
+                        - containerPort: 8081
+            EOF
+
+            # Create service YAML
+            cat <<EOF > service.yaml
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: static-site-service
+            spec:
+              type: NodePort
+              selector:
+                app: static-site
+              ports:
+                - port: 8081
+                  targetPort: 8081
+                  nodePort: 30081
+            EOF
+
+            # Apply deployment and service
+            kubectl apply -f deployment.yaml
+            kubectl apply -f service.yaml
