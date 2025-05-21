@@ -1,0 +1,52 @@
+name: Deploy Static HTML using Python HTTP Server
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Deploy to Contabo with Python HTTP Server
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: SSH and deploy on Contabo using password
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ secrets.CONTABO_HOST }}
+        username: ${{ secrets.CONTABO_USER }}
+        password: ${{ secrets.CONTABO_PASSWORD }}
+        script: |
+          cd /root/devops_project
+
+          # Stop and remove old container
+          docker stop static-site || true
+          docker rm static-site || true
+
+          # Remove old image
+          docker rmi static-site-image || true
+
+          # Pull latest code
+          rm -rf devops
+          git clone https://github.com/riphah012/devops.git
+          cd devops
+
+          # Copy index.html to target directory (optional, depending on context)
+          cp index.html /root/devops_project/
+
+          # Create Dockerfile with Python HTTP Server
+          cat <<EOF > Dockerfile
+          FROM python:3.11-alpine
+          WORKDIR /app
+          COPY index.html /app/
+          EXPOSE 8081
+          CMD ["python3", "-m", "http.server", "8081"]
+          EOF
+
+          # Build and run container
+          docker build -t static-site-image .
+          docker run -d --name static-site -p 8081:8081 static-site-image
