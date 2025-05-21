@@ -1,42 +1,40 @@
-name: Deploy to Minikube on Contabo
+steps:
+- name: Checkout repository
+  uses: actions/checkout@v3
 
-on:
-  push:
-    branches:
-      - main  # or your deployment branch
+- name: SSH and deploy on Contabo using password
+  uses: appleboy/ssh-action@v1.0.0
+  with:
+    host: ${{ secrets.CONTABO_HOST }}
+    username: ${{ secrets.CONTABO_USER }}
+    password: ${{ secrets.CONTABO_PASSWORD }}
+    script: |
+      cd /root/devops_project
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
+      # Stop and remove old container
+      docker stop static-site || true
+      docker rm static-site || true
 
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
+      # Remove old image
+      docker rmi static-site-image || true
 
-      - name: Deploy to Contabo with Minikube
-        uses: appleboy/ssh-action@v0.1.7
-        with:
-          host: ${{ secrets.CONTABO_HOST }}
-          username: ${{ secrets.CONTABO_USER }}
-          password: ${{ secrets.CONTABO_PASSWORD }}
-          port: 22
-          script: |
-            # Go to correct directory
-            cd /root/devops_project/devops
+      # Pull latest code
+      rm -rf devops
+      git clone <https://github.com/riphah012/devops.git>
+      cd devops
 
-            # Start Minikube if not running
-            if ! minikube status | grep -q "host: Running"; then
-              minikube start
-            fi
+      # Copy index.html to target directory (optional, depending on context)
+      cp index.html /root/devops_project/
 
-            # Point Docker to Minikube's environment
-            eval $(minikube docker-env)
+      # Create Dockerfile with Python HTTP Server
+      cat <<EOF > Dockerfile
+      FROM python:3.11-alpine
+      WORKDIR /app
+      COPY index.html /app/
+      EXPOSE 8081
+      CMD ["python3", "-m", "http.server", "8081"]
+      EOF
 
-            # Build Docker image inside Minikube
-            docker build -t my-static-site:latest .
-
-            # Apply Kubernetes deployment
-            kubectl apply -f deployment.yaml
-
-            # Wait for deployment rollout
-            kubectl rollout status deployment/static-site
+      # Build and run container
+      docker build -t static-site-image .
+      docker run -d --name static-site -p 8081:8081 static-site-image
